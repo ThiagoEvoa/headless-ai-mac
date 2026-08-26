@@ -61,7 +61,7 @@ Running macOS without a GUI session reclaims **2.5–4 GB of Unified Memory** th
 | **Ollama**    | Installs Ollama and creates a `launchd` daemon with production performance flags    |
 | **SSH**       | Enables Remote Login so the Mac is accessible over the network                      |
 | **Tailscale** | Optionally installs Tailscale for secure remote access from anywhere                |
-|---------------|-------------------------------------------------------------------------------------|
+
 
 ---
 
@@ -162,7 +162,6 @@ The following background processes are disabled to free RAM and CPU for inferenc
 | `com.apple.AirPlayXPCHelper`                       | AirPlay                     |
 | `com.apple.UsageTrackingAgent`                     | Screen Time tracking        |
 | `com.apple.PrivacyAnalyticsUtility`                | Privacy analytics           |
-|----------------------------------------------------|-----------------------------|
 
 Additionally:
 - **Spotlight indexing** is disabled system-wide (`mdutil -a -i off`)
@@ -195,7 +194,6 @@ A production `LaunchDaemon` (`com.ollama.headless`) is installed that starts Oll
 | `OLLAMA_KEEP_ALIVE`        | `-1`                         | Keeps the model pinned in memory indefinitely — no reload delay between requests      |
 | `OLLAMA_NUM_PARALLEL`      | `1` (≤64 GB) / `2` (128 GB+) | Concurrent request slots — tuned per RAM tier                                         |
 | `OLLAMA_MAX_LOADED_MODELS` | `1`                          | Prevents multiple models competing for RAM                                            |
-|----------------------------|------------------------------|---------------------------------------------------------------------------------------|
 
 Logs are written to:
 - `stdout` → `/var/log/ollama.log`
@@ -258,7 +256,6 @@ ollama pull <model-name>
 | 64 GB   | `qwen3.8:27b-q8_0`    | ~30 GB |
 | 128 GB  | `qwen3.8:27b-mxfp8`   | ~32 GB |
 | 256 GB+ | `qwen3.8:27b-bf16`    | ~56 GB |
-|---------|-----------------------|--------|
 
 Browse all available models at [ollama.com/search](https://ollama.com/search).
 
@@ -348,7 +345,6 @@ sudo python3 headless-ai-mac.py --restore
 | Siri, iCloud, analytics       | Restored to defaults                                         |
 | Automatic updates             | Re-enabled                                                   |
 | Ollama daemon                 | Optionally disabled (Ollama stays installed)                 |
-|-------------------------------|--------------------------------------------------------------|
 
 > **Homebrew, Ollama, and Tailscale are not removed** — they are useful in desktop mode too. Restart the Mac after restoring for all changes to take full effect.
 
