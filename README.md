@@ -40,10 +40,10 @@ Running macOS without a GUI session reclaims **2.5–4 GB of Unified Memory** th
 │                    32 GB UNIFIED MEMORY                     │
 │                                                             │
 │  Standard Mac (GUI):                                        │
-│  [ macOS + WindowServer (~5 GB) ] [ Free VRAM (~27 GB) ]   │
+│  [ macOS + WindowServer (~5 GB) ] [ Free VRAM (~27 GB) ]    │
 │                                                             │
 │  Headless Mac (this script):                                │
-│  [ macOS Minimal (~2 GB) ]  [ >>> Free VRAM (~30 GB) <<< ] │
+│  [ macOS Minimal (~2 GB) ]  [ >>> Free VRAM (~30 GB) <<< ]  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -51,16 +51,17 @@ Running macOS without a GUI session reclaims **2.5–4 GB of Unified Memory** th
 
 ## What the Script Does
 
-| Phase | Description |
-|---|---|
-| **Detect** | Reads chip model (M1–M5, base/Pro/Max/Ultra) and total RAM |
-| **VRAM** | Sets an aggressive GPU memory limit (~90% of RAM) and persists it across reboots |
-| **Power** | Disables all sleep modes, enables auto-restart on power failure or kernel panic |
-| **Services** | Disables ~20 background agents (Spotlight, Siri, iCloud, analytics, photo analysis) |
-| **Homebrew** | Installs Homebrew if missing and adds it to `~/.zshrc` |
-| **Ollama** | Installs Ollama and creates a `launchd` daemon with production performance flags |
-| **SSH** | Enables Remote Login so the Mac is accessible over the network |
-| **Tailscale** | Optionally installs Tailscale for secure remote access from anywhere |
+| Phase         | Description                                                                         |
+|---------------|-------------------------------------------------------------------------------------|
+| **Detect**    | Reads chip model (M1–M5, base/Pro/Max/Ultra) and total RAM                          |
+| **VRAM**      | Sets an aggressive GPU memory limit (~90% of RAM) and persists it across reboots    |
+| **Power**     | Disables all sleep modes, enables auto-restart on power failure or kernel panic     |
+| **Services**  | Disables ~20 background agents (Spotlight, Siri, iCloud, analytics, photo analysis) |
+| **Homebrew**  | Installs Homebrew if missing and adds it to `~/.zshrc`                              |
+| **Ollama**    | Installs Ollama and creates a `launchd` daemon with production performance flags    |
+| **SSH**       | Enables Remote Login so the Mac is accessible over the network                      |
+| **Tailscale** | Optionally installs Tailscale for secure remote access from anywhere                |
+|---------------|-------------------------------------------------------------------------------------|
 
 ---
 
@@ -145,22 +146,23 @@ The limit is applied immediately via `sysctl`, persisted in `/etc/sysctl.conf`, 
 
 The following background processes are disabled to free RAM and CPU for inference:
 
-| Service | Purpose |
-|---|---|
-| `com.apple.photoanalysisd` | Photo analysis / ML tagging |
-| `com.apple.suggestd` | Siri suggestions |
-| `com.apple.parsecd` | Universal links parsing |
-| `com.apple.knowledge-agent` | Siri knowledge base |
-| `com.apple.cloudd` / `cloudpaird` / `cloudphotod` | iCloud sync |
-| `com.apple.iCloudHelper` / `com.apple.bird` | iCloud Drive |
-| `com.apple.coreduetd` | Spotlight data aggregation |
-| `com.apple.spotlight.IndexAgent` | Spotlight indexing |
-| `com.apple.Siri` / `siriknowledged` / `assistantd` | Siri |
-| `com.apple.helpd` | Help centre |
-| `com.apple.screensharing` | Screen sharing |
-| `com.apple.AirPlayXPCHelper` | AirPlay |
-| `com.apple.UsageTrackingAgent` | Screen Time tracking |
-| `com.apple.PrivacyAnalyticsUtility` | Privacy analytics |
+| Service                                            | Purpose                     |
+|----------------------------------------------------|-----------------------------|
+| `com.apple.photoanalysisd`                         | Photo analysis / ML tagging |
+| `com.apple.suggestd`                               | Siri suggestions            |
+| `com.apple.parsecd`                                | Universal links parsing     |
+| `com.apple.knowledge-agent`                        | Siri knowledge base         |
+| `com.apple.cloudd` / `cloudpaird` / `cloudphotod`  | iCloud sync                 |
+| `com.apple.iCloudHelper` / `com.apple.bird`        | iCloud Drive                |
+| `com.apple.coreduetd`                              | Spotlight data aggregation  |
+| `com.apple.spotlight.IndexAgent`                   | Spotlight indexing          |
+| `com.apple.Siri` / `siriknowledged` / `assistantd` | Siri                        |
+| `com.apple.helpd`                                  | Help centre                 |
+| `com.apple.screensharing`                          | Screen sharing              |
+| `com.apple.AirPlayXPCHelper`                       | AirPlay                     |
+| `com.apple.UsageTrackingAgent`                     | Screen Time tracking        |
+| `com.apple.PrivacyAnalyticsUtility`                | Privacy analytics           |
+|----------------------------------------------------|-----------------------------|
 
 Additionally:
 - **Spotlight indexing** is disabled system-wide (`mdutil -a -i off`)
@@ -169,14 +171,15 @@ Additionally:
 
 **Power management** (`pmset`) is configured as:
 
-| Setting | Value |
-|---|---|
-| System sleep | Disabled |
-| Display sleep | Disabled |
-| Disk sleep | Disabled |
-| Auto-restart on power failure | Enabled |
-| Auto-restart on kernel panic | 15 seconds |
-| Wake on network access | Enabled |
+| Setting                       | Value      |
+|-------------------------------|------------|
+| System sleep                  | Disabled   |
+| Display sleep                 | Disabled   |
+| Disk sleep                    | Disabled   |
+| Auto-restart on power failure | Enabled    |
+| Auto-restart on kernel panic  | 15 seconds |
+| Wake on network access        | Enabled    |
+|-------------------------------|------------|
 
 ---
 
@@ -184,14 +187,15 @@ Additionally:
 
 A production `LaunchDaemon` (`com.ollama.headless`) is installed that starts Ollama automatically on boot with the following performance flags:
 
-| Environment Variable | Value | Effect |
-|---|---|---|
-| `OLLAMA_HOST` | `0.0.0.0:11434` | Binds to all interfaces — accessible from LAN / Tailscale |
-| `OLLAMA_FLASH_ATTENTION` | `1` | Enables Flash Attention on Metal, cutting prefill latency 2–3× on long prompts |
-| `OLLAMA_KV_CACHE_TYPE` | `q8_0` | Quantises the KV cache to 8-bit, saving ~50% context RAM with negligible quality loss |
-| `OLLAMA_KEEP_ALIVE` | `-1` | Keeps the model pinned in memory indefinitely — no reload delay between requests |
-| `OLLAMA_NUM_PARALLEL` | `1` (≤64 GB) / `2` (128 GB+) | Concurrent request slots — tuned per RAM tier |
-| `OLLAMA_MAX_LOADED_MODELS` | `1` | Prevents multiple models competing for RAM |
+| Environment Variable       | Value                        | Effect                                                                                |
+|----------------------------|------------------------------|---------------------------------------------------------------------------------------|
+| `OLLAMA_HOST`              | `0.0.0.0:11434`              | Binds to all interfaces — accessible from LAN / Tailscale                             |
+| `OLLAMA_FLASH_ATTENTION`   | `1`                          | Enables Flash Attention on Metal, cutting prefill latency 2–3× on long prompts        |
+| `OLLAMA_KV_CACHE_TYPE`     | `q8_0`                       | Quantises the KV cache to 8-bit, saving ~50% context RAM with negligible quality loss |
+| `OLLAMA_KEEP_ALIVE`        | `-1`                         | Keeps the model pinned in memory indefinitely — no reload delay between requests      |
+| `OLLAMA_NUM_PARALLEL`      | `1` (≤64 GB) / `2` (128 GB+) | Concurrent request slots — tuned per RAM tier                                         |
+| `OLLAMA_MAX_LOADED_MODELS` | `1`                          | Prevents multiple models competing for RAM                                            |
+|----------------------------|------------------------------|---------------------------------------------------------------------------------------|
 
 Logs are written to:
 - `stdout` → `/var/log/ollama.log`
@@ -247,13 +251,14 @@ ollama pull <model-name>
 
 **Recommended models by RAM tier:**
 
-| RAM | Recommended Model | Size |
-|-----|-------------------|------|
-| 16 GB | `qwen3.6:27b` (4-bit) | ~17 GB |
-| 32 GB | `qwen3.8:27b-q4_K_M` | ~18 GB |
-| 64 GB | `qwen3.8:27b-q8_0` | ~30 GB |
-| 128 GB | `qwen3.8:27b-mxfp8` | ~32 GB |
-| 256 GB+ | `qwen3.8:27b-bf16` | ~56 GB |
+| RAM     | Recommended Model     | Size   |
+|---------|-----------------------|--------|
+| 16 GB   | `qwen3.6:27b` (4-bit) | ~17 GB |
+| 32 GB   | `qwen3.8:27b-q4_K_M`  | ~18 GB |
+| 64 GB   | `qwen3.8:27b-q8_0`    | ~30 GB |
+| 128 GB  | `qwen3.8:27b-mxfp8`   | ~32 GB |
+| 256 GB+ | `qwen3.8:27b-bf16`    | ~56 GB |
+|---------|-----------------------|--------|
 
 Browse all available models at [ollama.com/search](https://ollama.com/search).
 
@@ -331,18 +336,19 @@ sudo python3 headless-ai-mac.py --restore
 
 **What gets restored:**
 
-| Setting | Restored Value |
-|---|---|
-| System / display / disk sleep | macOS defaults (1 min display, 10 min disk) |
-| VRAM limit | Reset to macOS dynamic allocation (`iogpu.wired_limit_mb=0`) |
-| VRAM LaunchDaemon | Removed |
-| `/etc/sysctl.conf` entry | Removed |
-| Spotlight indexing | Re-enabled (`mdutil -a -i on`) |
-| Background launch agents | Re-enabled |
-| App Nap | Re-enabled |
-| Siri, iCloud, analytics | Restored to defaults |
-| Automatic updates | Re-enabled |
-| Ollama daemon | Optionally disabled (Ollama stays installed) |
+| Setting                       | Restored Value                                               |
+|-------------------------------|--------------------------------------------------------------|
+| System / display / disk sleep | macOS defaults (1 min display, 10 min disk)                  |
+| VRAM limit                    | Reset to macOS dynamic allocation (`iogpu.wired_limit_mb=0`) |
+| VRAM LaunchDaemon             | Removed                                                      |
+| `/etc/sysctl.conf` entry      | Removed                                                      |
+| Spotlight indexing            | Re-enabled (`mdutil -a -i on`)                               |
+| Background launch agents      | Re-enabled                                                   |
+| App Nap                       | Re-enabled                                                   |
+| Siri, iCloud, analytics       | Restored to defaults                                         |
+| Automatic updates             | Re-enabled                                                   |
+| Ollama daemon                 | Optionally disabled (Ollama stays installed)                 |
+|-------------------------------|--------------------------------------------------------------|
 
 > **Homebrew, Ollama, and Tailscale are not removed** — they are useful in desktop mode too. Restart the Mac after restoring for all changes to take full effect.
 
