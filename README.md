@@ -178,7 +178,6 @@ Additionally:
 | Auto-restart on power failure | Enabled    |
 | Auto-restart on kernel panic  | 15 seconds |
 | Wake on network access        | Enabled    |
-|-------------------------------|------------|
 
 ---
 
