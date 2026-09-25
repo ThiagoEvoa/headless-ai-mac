@@ -11,6 +11,7 @@ Designed for **Mac Mini**, **Mac Studio**, and **MacBook** running as a dedicate
 - [Why Headless?](#why-headless)
 - [What the Script Does](#what-the-script-does)
 - [Requirements](#requirements)
+- [Prerequisites](#prerequisites)
 - [Usage](#usage)
   - [Setup](#setup)
   - [Restore (Desktop Mode)](#restore-desktop-mode)
@@ -20,7 +21,7 @@ Designed for **Mac Mini**, **Mac Studio**, and **MacBook** running as a dedicate
   - [Disabled Services](#disabled-services)
   - [Ollama Configuration](#ollama-configuration)
   - [Homebrew](#homebrew)
-  - [Tailscale & Remote Access](#tailscale--remote-access)
+  - [Enabling Remote Access (SSH) — manual](#enabling-remote-access-ssh--manual)
 - [After Setup](#after-setup)
   - [Pulling a Model](#pulling-a-model)
   - [Useful Commands](#useful-commands)
@@ -58,9 +59,10 @@ Running macOS without a GUI session reclaims **2.5–4 GB of Unified Memory** th
 | **Power**     | Disables all sleep modes, enables auto-restart on power failure or kernel panic     |
 | **Services**  | Disables ~20 background agents (Spotlight, Siri, iCloud, analytics, photo analysis) |
 | **Homebrew**  | Installs Homebrew if missing and adds it to `~/.zshrc`                              |
-| **Ollama**    | Installs Ollama and creates a `launchd` daemon with production performance flags    |
-| **SSH**       | Enables Remote Login so the Mac is accessible over the network                      |
-| **Tailscale** | Optionally installs Tailscale for secure remote access from anywhere                |
+| **Ollama**      | Validates an existing Ollama install, then applies a `launchd` daemon with production performance flags |
+| **SSH**         | Reminds user to enable Remote Login manually — the script cannot enable it automatically |
+
+> **The script does not install Ollama.** It expects the Ollama binary to already be present and only writes the daemon configuration. A prerequisite check runs first and aborts the run if any required binary is missing.
 
 
 ---
@@ -69,10 +71,21 @@ Running macOS without a GUI session reclaims **2.5–4 GB of Unified Memory** th
 
 - **macOS** on Apple Silicon (M1, M2, M3, M4, M5 — any tier)
 - **Python 3** (pre-installed on macOS)
-- **Internet connection** (for Homebrew, Ollama, and Tailscale)
 - **`sudo` privileges**
 
 No third-party Python packages are required — the script uses only the standard library.
+
+---
+
+## Prerequisites
+
+The script **does not install** any user-facing applications. It validates that the following binaries are already available on the system before making any changes. If a binary is missing, the run aborts with an install hint.
+
+| Binary       | Why required | Install manually if missing                                             |
+|-----------|--------------|----------------------------------------------------------------------|
+| `ollama`     | Local inference server the daemon manages | `brew install ollama`     — or download from [ollama.com/download/mac](https://ollama.com/download/mac) |
+
+Homebrew is **installed automatically** by the script if missing — it is not a manual prerequisite. Only `ollama` must be pre-installed.
 
 ---
 
@@ -90,8 +103,9 @@ sudo python3 headless-ai-mac.py
 
 The script will:
 1. Print your detected hardware configuration and ask for confirmation before making any changes.
-2. Walk through each phase, showing progress for every step.
-3. Print a final summary with useful commands when complete.
+2. Run a **prerequisite check** — if Ollama (or another required binary) is missing, it aborts here and tells you how to install it.
+3. Walk through each phase, showing progress for every step.
+4. Print a final summary with useful commands when complete.
 
 > **Note:** The script will automatically re-invoke itself with `sudo` if not already running as root.
 
@@ -183,11 +197,13 @@ Additionally:
 
 ### Ollama Configuration
 
-A production `LaunchDaemon` (`com.ollama.headless`) is installed that starts Ollama automatically on boot with the following performance flags:
+> **Ollama is not installed by this script.** The `ollama` binary must already be present. The prerequisite check aborts the run if it is missing — see [Prerequisites](#prerequisites).
+
+A production `LaunchDaemon` (`com.ollama.headless`) is configured to start Ollama automatically on boot with the following performance flags:
 
 | Environment Variable       | Value                        | Effect                                                                                |
 |----------------------------|------------------------------|---------------------------------------------------------------------------------------|
-| `OLLAMA_HOST`              | `0.0.0.0:11434`              | Binds to all interfaces — accessible from LAN / Tailscale                             |
+| `OLLAMA_HOST`              | `0.0.0.0:11434`              | Binds to all interfaces — accessible from the LAN / over SSH                             |
 | `OLLAMA_FLASH_ATTENTION`   | `1`                          | Enables Flash Attention on Metal, cutting prefill latency 2–3× on long prompts        |
 | `OLLAMA_KV_CACHE_TYPE`     | `q8_0`                       | Quantises the KV cache to 8-bit, saving ~50% context RAM with negligible quality loss |
 | `OLLAMA_KEEP_ALIVE`        | `-1`                         | Keeps the model pinned in memory indefinitely — no reload delay between requests      |
@@ -210,29 +226,30 @@ eval "$(/opt/homebrew/bin/brew shellenv)"
 # <<< Homebrew <<<
 ```
 
-This ensures `brew`, `ollama`, and `tailscale` are available in all future shell sessions.
+This ensures `brew` and `ollama` are available in all future shell sessions.
 
 ---
 
-### Tailscale & Remote Access
+### Enabling Remote Access (SSH) — manual
 
-[Tailscale](https://tailscale.com) creates an encrypted WireGuard mesh network, giving you a stable private IP for the Mac regardless of where it or you are physically located.
-
-The script:
-1. Installs the Tailscale macOS app via `brew install --cask tailscale`
-2. Opens the app for you to sign in via the menu bar
-
-Once connected, you can access the Mac from any device on your Tailscale network:
+The script **does not** enable SSH. `systemsetup -setremotelogin` needs a user session and fails in this headless context, so Remote Login is a manual step. After setup, enable it yourself:
 
 ```bash
-# SSH into the Mac
-ssh username@<tailscale-ip>
+# Option A — System Settings
+#   General → Sharing → Remote Login   (turn ON)
 
-# Access Ollama API remotely
-curl http://<tailscale-ip>:11434/api/tags
+# Option B — from a terminal
+sudo systemsetup -setremotelogin on
+
+# Verify it is on
+sudo systemsetup -getremotelogin
 ```
 
-SSH (Remote Login) is also enabled by the script via `systemsetup -setremotelogin on`.
+Then connect over the network from another host:
+
+```bash
+ssh <user>@<mac-ip>
+```
 
 ---
 
@@ -345,13 +362,14 @@ sudo python3 headless-ai-mac.py --restore
 | Automatic updates             | Re-enabled                                                   |
 | Ollama daemon                 | Optionally disabled (Ollama stays installed)                 |
 
-> **Homebrew, Ollama, and Tailscale are not removed** — they are useful in desktop mode too. Restart the Mac after restoring for all changes to take full effect.
+> **Homebrew and Ollama are not removed** — they are useful in desktop mode too. Restart the Mac after restoring for all changes to take full effect.
 
 ---
 
 ## What Is NOT Changed
 
 - No apps are deleted or modified
+- **No user-facing applications are installed** — only Homebrew is auto-installed; Ollama must be pre-installed manually
 - No user data is touched
 - No network firewall rules are changed
 - No system files outside of `/etc/sysctl.conf` and `/Library/LaunchDaemons/` are written

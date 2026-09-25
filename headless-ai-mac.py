@@ -2,7 +2,7 @@
 """
 Headless AI Mac Setup Script
 Detects Apple Silicon configuration and applies optimized settings for local AI inference.
-Includes: Ollama setup, VRAM tuning, sleep prevention, unnecessary app disabling, and Tailscale.
+Includes: Ollama setup, VRAM tuning, sleep prevention, and unnecessary app disabling.
 """
 
 import subprocess
@@ -320,7 +320,7 @@ def install_homebrew():
         append_to_zshrc(BREW_SHELL_BLOCK, "brew shellenv")
         return brew_path
 
-    step("Homebrew not found. Installing now (required for Ollama & Tailscale)...")
+    step("Homebrew not found. Installing now (required for Ollama)...")
     try:
         env = os.environ.copy()
         env["NONINTERACTIVE"] = "1"
@@ -347,28 +347,36 @@ def install_homebrew():
 
 # ─── Step 5 – Install & configure Ollama ─────────────────────────────────────
 
-def install_ollama(brew_path):
-    header("Ollama Installation")
-    ollama_bin = run_capture("which ollama")
-    if ollama_bin:
-        version = run_capture("ollama --version")
-        info(f"Ollama already installed: {version}")
-        return True
-    if not brew_path:
-        error("Homebrew unavailable. Cannot install Ollama.")
-        step("Download manually from https://ollama.com/download/mac")
-        return False
-    step("Installing Ollama via Homebrew...")
-    try:
-        run([brew_path, "install", "ollama"])
-        info("Ollama installed via Homebrew.")
-        return True
-    except Exception as e:
-        error(f"Ollama install failed: {e}")
-        return False
+def check_prerequisites():
+    """Validate binaries the user must install themselves. This script no longer
+    auto-installs anything - any missing dependency stops the flow immediately."""
+    header("Prerequisite Check (manually installed dependencies)")
+
+    # binary name -> install hint shown when missing
+    required = {
+        "ollama": "brew install ollama     (or https://ollama.com/download/mac)",
+    }
+
+    missing = []
+    for binary, hint in required.items():
+        path = run_capture(f"which {binary}")
+        if path:
+            version = run_capture(f"{binary} --version")
+            info(f"OK     {binary:<8} {path}" + (f"    ({version})" if version else ""))
+        else:
+            missing.append((binary, hint))
+
+    if missing:
+        error("Missing required dependency(ies):")
+        for binary, hint in missing:
+            step(f"install {binary}:    {hint}")
+        error("Resolve the above and re-run. Aborting.")
+        sys.exit(1)
+
+    info("All prerequisites satisfied.")
 
 def configure_ollama_launchd(ram_gb):
-    header("Configuring Ollama LaunchDaemon (Production Auto-Start)")
+    header("Applying Ollama LaunchDaemon Configuration (no install)")
 
     num_parallel = "2" if ram_gb >= 128 else "1"
     ollama_bin = run_capture("which ollama") or "/usr/local/bin/ollama"
@@ -430,52 +438,19 @@ def configure_ollama_launchd(ram_gb):
     except Exception as e:
         error(f"LaunchDaemon setup failed: {e}")
 
-# ─── Step 6 – Tailscale ───────────────────────────────────────────────────────
+# ─── Step 7 – SSH / Remote Login reminder (manual) ─────────────────────────────
 
-def install_tailscale(brew_path):
-    header("Tailscale – Remote Access")
-    if not confirm("Install Tailscale for secure remote access?"):
-        warn("Skipping Tailscale.")
-        return
-
-    ts_bin = run_capture("which tailscale")
-    if ts_bin:
-        info("Tailscale already installed.")
-    else:
-        if not brew_path:
-            error("Homebrew unavailable. Download Tailscale from https://tailscale.com/download/mac")
-            return
-        step("Installing Tailscale via Homebrew Cask...")
-        try:
-            run([brew_path, "install", "--cask", "tailscale"])
-            info("Tailscale installed.")
-        except Exception as e:
-            error(f"Tailscale install failed: {e}")
-            step("Download manually from https://tailscale.com/download/mac")
-            return
-
-    step("Enabling Tailscale via launchctl...")
-    ts_app = Path("/Applications/Tailscale.app")
-    if ts_app.exists():
-        subprocess.run(["open", "-a", "Tailscale"], check=False)
-        info("Tailscale app opened. Complete login in the menu bar icon.")
-    else:
-        step("Start Tailscale manually: open -a Tailscale  (or: tailscale up)")
-
-    info("Tip: once connected, access this Mac by hostname or Tailscale IP.")
-    info("Tip: enable SSH on this Mac (System Settings → General → Sharing → Remote Login).")
-
-# ─── Step 7 – SSH hardening reminder ──────────────────────────────────────────
-
-def enable_ssh():
-    header("SSH / Remote Login")
-    step("Enabling Remote Login (SSH)...")
-    try:
-        run(["systemsetup", "-setremotelogin", "on"], sudo=True)
-        info("SSH (Remote Login) enabled.")
-    except Exception as e:
-        warn(f"Could not enable SSH automatically: {e}")
-        step("Enable manually: System Settings → General → Sharing → Remote Login")
+def remind_ssh_manual():
+    """The script does not enable SSH — `systemsetup -setremotelogin` requires a
+    user session on modern macOS and fails under this headless/CI context. It is
+    left as a manual step the user performs themselves."""
+    header("SSH / Remote Login (manual step)")
+    step("The script cannot enable Remote Login automatically.")
+    info("Enable SSH yourself, then connect over the network:")
+    step("  1. System Settings → General → Sharing → Remote Login  (turn ON)")
+    step("  2. (or)  sudo systemsetup -setremotelogin on")
+    step("  3. From another host:  ssh <user>@<mac-ip>")
+    info("Tip: verify with  sudo systemsetup -getremotelogin")
 
 # ─── Step 8 – Print final summary ─────────────────────────────────────────────
 
@@ -655,7 +630,7 @@ def restore():
     ✔  VRAM LaunchDaemon removed
 
   {BOLD}Note:{RESET}
-    Homebrew, Ollama, and Tailscale remain installed.
+    Homebrew and Ollama remain installed.
     Plug in your monitor and restart to apply all changes cleanly.
 """)
 
@@ -683,14 +658,13 @@ def main():
         warn("Aborted.")
         sys.exit(0)
 
+    check_prerequisites()
+
     disable_unnecessary_services()
     configure_vram(vram_mb, hw["ram_gb"])
-    brew_path = install_homebrew()
-    ollama_ok = install_ollama(brew_path)
-    if ollama_ok:
-        configure_ollama_launchd(hw["ram_gb"])
-    enable_ssh()
-    install_tailscale(brew_path)
+    install_homebrew()
+    configure_ollama_launchd(hw["ram_gb"])
+    remind_ssh_manual()
     print_final_summary(hw, vram_mb)
 
 if __name__ == "__main__":
