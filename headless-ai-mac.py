@@ -13,6 +13,11 @@ import json
 import platform
 import urllib.request
 import tempfile
+import argparse
+import plistlib
+import pwd
+import shutil
+import time
 from pathlib import Path
 
 # ─── ANSI colors ──────────────────────────────────────────────────────────────
@@ -347,96 +352,171 @@ def install_homebrew():
 
 # ─── Step 5 – Install & configure Ollama ─────────────────────────────────────
 
-def check_prerequisites():
-    """Validate binaries the user must install themselves. This script no longer
-    auto-installs anything - any missing dependency stops the flow immediately."""
-    header("Prerequisite Check (manually installed dependencies)")
+OLLAMA_LABEL = "com.ollama.headless"
+OLLAMA_PLIST = Path("/Library/LaunchDaemons/com.ollama.headless.plist")
+OLLAMA_LOGS = (Path("/var/log/ollama.log"), Path("/var/log/ollama.err"))
 
-    # binary name -> install hint shown when missing
-    required = {
-        "ollama": "brew install ollama     (or https://ollama.com/download/mac)",
+
+def resolve_ollama_account(username=None):
+    """Use the invoking account, never sudo's root HOME/model store."""
+    username = username or os.environ.get("SUDO_USER")
+    if not username:
+        if os.getuid() == 0:
+            raise RuntimeError("Cannot determine model owner. Use --user <non-root-account>.")
+        username = pwd.getpwuid(os.getuid()).pw_name
+    try:
+        account = pwd.getpwnam(username)
+    except KeyError as exc:
+        raise RuntimeError(f"Unknown account: {username}") from exc
+    if account.pw_uid == 0:
+        raise RuntimeError("Ollama must run as a non-root account; use --user.")
+    if not Path(account.pw_dir).is_dir():
+        raise RuntimeError(f"Account home does not exist: {account.pw_dir}")
+    return account
+
+
+def find_ollama_binary():
+    binary = shutil.which("ollama")
+    if binary:
+        return binary
+    for candidate in ("/opt/homebrew/bin/ollama", "/usr/local/bin/ollama",
+                      "/Applications/Ollama.app/Contents/Resources/ollama"):
+        if os.access(candidate, os.X_OK) and Path(candidate).is_file():
+            return candidate
+    raise RuntimeError("Ollama missing. Install with brew install ollama or ollama.com/download/mac.")
+
+
+def check_prerequisites():
+    """Check binary presence without invoking CLI (which may start the desktop app)."""
+    header("Prerequisite Check (manually installed dependencies)")
+    binary = find_ollama_binary()
+    check_ollama_port()
+    info(f"Ollama binary: {binary}")
+    return binary
+
+
+def ollama_daemon_pid():
+    result = run(["launchctl", "print", f"system/{OLLAMA_LABEL}"],
+                 sudo=True, check=False, capture=True)
+    if result.returncode != 0:
+        return None
+    # Anchor at the service-level indentation, not nested resource states.
+    match = re.search(r"^\s*pid = (\d+)\s*$", result.stdout, re.MULTILINE)
+    return int(match.group(1)) if match else None
+
+
+def ollama_listener_pids():
+    result = run(["/usr/sbin/lsof", "-nP", "-t", "-iTCP:11434", "-sTCP:LISTEN"],
+                 sudo=True, check=False, capture=True)
+    # lsof returns 1 with no output when no socket matches.
+    if result.returncode not in (0, 1) or (result.returncode == 1 and result.stderr.strip()):
+        raise RuntimeError(f"Cannot inspect port 11434: {result.stderr}")
+    return {int(line) for line in result.stdout.splitlines() if line.strip()}
+
+
+def check_ollama_port():
+    listeners = ollama_listener_pids()
+    if listeners and listeners != {ollama_daemon_pid()}:
+        raise RuntimeError(
+            f"Port 11434 belongs to another server (PIDs: {sorted(listeners)}). "
+            "Quit Ollama desktop app and disable its launch-at-login option, or stop "
+            "the existing Homebrew/manual service, then rerun. No process was killed."
+        )
+
+
+def ollama_models_path(account, plist_path=OLLAMA_PLIST):
+    """Keep a previously configured custom store when repairing/re-running setup."""
+    if plist_path.exists():
+        config = plistlib.loads(plist_path.read_bytes())
+        models = config.get("EnvironmentVariables", {}).get("OLLAMA_MODELS")
+        if models:
+            if not isinstance(models, str) or not Path(models).is_absolute():
+                raise RuntimeError("Existing OLLAMA_MODELS must be an absolute directory path.")
+            return models
+    return str(Path(account.pw_dir) / ".ollama" / "models")
+
+
+def build_ollama_plist(account, binary, ram_gb, models):
+    return {
+        "Label": OLLAMA_LABEL,
+        "UserName": account.pw_name,
+        "ProgramArguments": [binary, "serve"],
+        "EnvironmentVariables": {
+            "HOME": account.pw_dir,
+            "OLLAMA_MODELS": models,
+            "OLLAMA_HOST": "0.0.0.0:11434",
+            "OLLAMA_FLASH_ATTENTION": "1",
+            "OLLAMA_KV_CACHE_TYPE": "q8_0",
+            "OLLAMA_KEEP_ALIVE": "-1",
+            "OLLAMA_NUM_PARALLEL": "2" if ram_gb >= 128 else "1",
+            "OLLAMA_MAX_LOADED_MODELS": "1",
+        },
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": str(OLLAMA_LOGS[0]),
+        "StandardErrorPath": str(OLLAMA_LOGS[1]),
+        "ProcessType": "Interactive",
     }
 
-    missing = []
-    for binary, hint in required.items():
-        path = run_capture(f"which {binary}")
-        if path:
-            version = run_capture(f"{binary} --version")
-            info(f"OK     {binary:<8} {path}" + (f"    ({version})" if version else ""))
-        else:
-            missing.append((binary, hint))
 
-    if missing:
-        error("Missing required dependency(ies):")
-        for binary, hint in missing:
-            step(f"install {binary}:    {hint}")
-        error("Resolve the above and re-run. Aborting.")
-        sys.exit(1)
+def prepare_ollama_logs(account, paths=OLLAMA_LOGS):
+    for path in paths:
+        if path.is_symlink():
+            raise RuntimeError(f"Refusing symlink log path: {path}")
+        path.touch(exist_ok=True)  # Preserve existing diagnostic history.
+        os.chown(path, account.pw_uid, account.pw_gid)
+        path.chmod(0o640)
 
-    info("All prerequisites satisfied.")
 
-def configure_ollama_launchd(ram_gb):
+def wait_for_ollama(attempts=30):
+    for _ in range(attempts):
+        pid = ollama_daemon_pid()
+        if pid and ollama_listener_pids() == {pid}:
+            return pid
+        time.sleep(1)
+    raise RuntimeError(
+        f"Ollama failed to start within {attempts} seconds. Inspect launchctl print "
+        "system/com.ollama.headless and /var/log/ollama.err (old errors may remain)."
+    )
+
+
+def configure_ollama_launchd(ram_gb, account=None, binary=None, plist_path=OLLAMA_PLIST):
     header("Applying Ollama LaunchDaemon Configuration (no install)")
+    account = account or resolve_ollama_account()
+    binary = binary or find_ollama_binary()
+    models = ollama_models_path(account, plist_path)
+    config = build_ollama_plist(account, binary, ram_gb, models)
+    check_ollama_port()
 
-    num_parallel = "2" if ram_gb >= 128 else "1"
-    ollama_bin = run_capture("which ollama") or "/usr/local/bin/ollama"
+    # Ignore bootout only when the job is already absent; verify any loaded job exits.
+    status = run(["launchctl", "print", f"system/{OLLAMA_LABEL}"],
+                 sudo=True, check=False, capture=True)
+    if status.returncode == 0:
+        run(["launchctl", "bootout", f"system/{OLLAMA_LABEL}"], sudo=True, capture=True)
+    check_ollama_port()
+    prepare_ollama_logs(account)
 
-    plist = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.ollama.headless</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{ollama_bin}</string>
-        <string>serve</string>
-    </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>OLLAMA_HOST</key>
-        <string>0.0.0.0:11434</string>
-        <key>OLLAMA_FLASH_ATTENTION</key>
-        <string>1</string>
-        <key>OLLAMA_KV_CACHE_TYPE</key>
-        <string>q8_0</string>
-        <key>OLLAMA_KEEP_ALIVE</key>
-        <string>-1</string>
-        <key>OLLAMA_NUM_PARALLEL</key>
-        <string>{num_parallel}</string>
-        <key>OLLAMA_MAX_LOADED_MODELS</key>
-        <string>1</string>
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/var/log/ollama.log</string>
-    <key>StandardErrorPath</key>
-    <string>/var/log/ollama.err</string>
-    <key>ProcessType</key>
-    <string>Interactive</string>
-</dict>
-</plist>
-"""
-    plist_path = Path("/Library/LaunchDaemons/com.ollama.headless.plist")
-    try:
-        if plist_path.exists():
-            run(["launchctl", "unload", str(plist_path)], sudo=True, check=False)
-        plist_path.write_text(plist)
-        run(["chown", "root:wheel", str(plist_path)], sudo=True)
-        run(["chmod", "644", str(plist_path)], sudo=True)
-        run(["launchctl", "load", "-w", str(plist_path)], sudo=True)
-        info("Ollama LaunchDaemon installed and started.")
-        info(f"  OLLAMA_HOST           = 0.0.0.0:11434")
-        info(f"  OLLAMA_FLASH_ATTENTION = 1")
-        info(f"  OLLAMA_KV_CACHE_TYPE  = q8_0")
-        info(f"  OLLAMA_KEEP_ALIVE     = -1 (always loaded)")
-        info(f"  OLLAMA_NUM_PARALLEL   = {num_parallel}")
-        info(f"  Logs → /var/log/ollama.log")
-    except Exception as e:
-        error(f"LaunchDaemon setup failed: {e}")
+    # Write XML via plistlib so paths containing XML metacharacters remain valid.
+    # Atomic replacement avoids leaving a partial boot-time configuration.
+    with tempfile.NamedTemporaryFile(dir=plist_path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            plistlib.dump(config, stream)
+            stream.flush()
+            os.chown(temporary, 0, 0)  # root:wheel on macOS
+            temporary.chmod(0o644)
+            temporary.replace(plist_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    run(["launchctl", "enable", f"system/{OLLAMA_LABEL}"], sudo=True, capture=True)
+    run(["launchctl", "bootstrap", "system", str(plist_path)], sudo=True, capture=True)
+    pid = wait_for_ollama()
+    info(f"Ollama LaunchDaemon running (PID {pid}, user {account.pw_name}).")
+    info(f"Models: {models}")
+    info("OLLAMA_MAX_LOADED_MODELS = 1")
+    info(f"OLLAMA_NUM_PARALLEL = {config['EnvironmentVariables']['OLLAMA_NUM_PARALLEL']}")
+    info("Logs: /var/log/ollama.log and /var/log/ollama.err")
 
 # ─── Step 7 – SSH / Remote Login reminder (manual) ─────────────────────────────
 
@@ -467,7 +547,7 @@ def print_final_summary(hw, vram_mb):
     API          : http://0.0.0.0:11434  (OpenAI-compatible /v1)
     Flash Attn   : ON
     KV Cache     : q8_0 (quantised, ~50% RAM savings)
-    Keep Alive   : ∞ (never unloads)
+    Keep Alive   : ∞ while idle (evicted on model switch)
     Logs         : /var/log/ollama.log
 
   {BOLD}Power:{RESET}
@@ -479,7 +559,8 @@ def print_final_summary(hw, vram_mb):
     tail -f /var/log/ollama.log
     sudo launchctl list | grep ollama
     sysctl iogpu.wired_limit_mb
-    ollama list
+    ollama list                     # installed models
+    ollama ps                       # loaded models
     curl http://localhost:11434/api/tags
 
   {BOLD}To restore macOS defaults (e.g. when connecting a monitor):{RESET}
@@ -610,7 +691,11 @@ def restore():
     if ollama_plist.exists():
         if confirm("Disable Ollama auto-start daemon? (ollama will still be installed)"):
             try:
-                run(["launchctl", "unload", "-w", str(ollama_plist)], sudo=True, check=False)
+                run(["launchctl", "disable", f"system/{OLLAMA_LABEL}"], sudo=True, capture=True)
+                status = run(["launchctl", "print", f"system/{OLLAMA_LABEL}"],
+                             sudo=True, check=False, capture=True)
+                if status.returncode == 0:
+                    run(["launchctl", "bootout", f"system/{OLLAMA_LABEL}"], sudo=True, capture=True)
                 info("Ollama auto-start disabled. Run 'ollama serve' manually when needed.")
             except Exception as e:
                 warn(f"Could not disable Ollama daemon: {e}")
@@ -645,27 +730,45 @@ def main():
         error("macOS required. Exiting.")
         sys.exit(1)
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--restore", action="store_true", help="Restore desktop defaults")
+    parser.add_argument("--user", help="Non-root Ollama account (default: SUDO_USER)")
+    parser.add_argument("--ollama-only", action="store_true",
+                        help="Repair Ollama only; do not change power, VRAM or macOS services")
+    args = parser.parse_args()
+    if args.restore and args.ollama_only:
+        parser.error("--restore and --ollama-only cannot be combined")
     require_sudo()
 
-    if "--restore" in sys.argv:
+    if args.restore:
         restore()
         sys.exit(0)
 
+    account = resolve_ollama_account(args.user)
+    ollama_binary = check_prerequisites()
     hw = detect_hardware()
+    if args.ollama_only:
+        if confirm("Configure/restart headless Ollama? Active inference will be interrupted."):
+            configure_ollama_launchd(hw["ram_gb"], account, ollama_binary)
+        else:
+            warn("Aborted.")
+        return
     vram_mb = print_summary(hw)
 
     if not confirm("\nProceed with full setup?"):
         warn("Aborted.")
         sys.exit(0)
 
-    check_prerequisites()
-
     disable_unnecessary_services()
     configure_vram(vram_mb, hw["ram_gb"])
     install_homebrew()
-    configure_ollama_launchd(hw["ram_gb"])
+    configure_ollama_launchd(hw["ram_gb"], account, ollama_binary)
     remind_ssh_manual()
     print_final_summary(hw, vram_mb)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (RuntimeError, OSError, ValueError, plistlib.InvalidFileException) as exc:
+        error(f"Setup failed: {exc}")
+        sys.exit(1)

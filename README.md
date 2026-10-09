@@ -14,6 +14,7 @@ Designed for **Mac Mini**, **Mac Studio**, and **MacBook** running as a dedicate
 - [Prerequisites](#prerequisites)
 - [Usage](#usage)
   - [Setup](#setup)
+  - [Repair Ollama Only](#repair-ollama-only)
   - [Restore (Desktop Mode)](#restore-desktop-mode)
 - [What Gets Configured](#what-gets-configured)
   - [Hardware Detection](#hardware-detection)
@@ -105,11 +106,39 @@ The script will:
 1. Print your detected hardware configuration and ask for confirmation before making any changes.
 2. Run a **prerequisite check** — if Ollama (or another required binary) is missing, it aborts here and tells you how to install it.
 3. Walk through each phase, showing progress for every step.
-4. Print a final summary with useful commands when complete.
+4. Verify the Ollama daemon is running and owns port `11434` before reporting success.
+5. Print a final summary with useful commands when complete.
+
+Run setup from the account that owns your models. The script uses `SUDO_USER` to
+resolve that account and its home directory, not root's `$HOME`. When running
+from a root shell, specify `--user <non-root-account>`.
+
+Before setup, quit the Ollama desktop app and disable its launch-at-login option.
+Stop any existing Homebrew/manual Ollama server too. If another server owns port
+`11434`, setup aborts **before applying system changes**; it does not kill processes.
+An already-running `com.ollama.headless` daemon is allowed and will be restarted.
+
+> Restarting the daemon interrupts active inference.
 
 > **Note:** The script will automatically re-invoke itself with `sudo` if not already running as root.
 
 ---
+
+### Repair Ollama Only
+
+For an existing installation, update the script and run:
+
+```bash
+sudo python3 headless-ai-mac.py --ollama-only
+# From a root shell (or to choose the model-owning account):
+sudo python3 headless-ai-mac.py --ollama-only --user <non-root-account>
+```
+
+This updates only the Ollama daemon, log permissions, and its launchd enabled
+state. It does not change VRAM, power settings, macOS services, or Homebrew.
+Existing `OLLAMA_MODELS` from the daemon plist is preserved. Otherwise, the store
+is `<account-home>/.ollama/models`. Models are not moved or recursively chowned;
+a custom store must already be accessible to the selected account.
 
 ### Restore (Desktop Mode)
 
@@ -199,20 +228,39 @@ Additionally:
 
 > **Ollama is not installed by this script.** The `ollama` binary must already be present. The prerequisite check aborts the run if it is missing — see [Prerequisites](#prerequisites).
 
-A production `LaunchDaemon` (`com.ollama.headless`) is configured to start Ollama automatically on boot with the following performance flags:
+A production `LaunchDaemon` (`com.ollama.headless`) is configured to start Ollama automatically on boot **as the selected non-root account**, with the following performance flags:
+
+Configuration file: `/Library/LaunchDaemons/com.ollama.headless.plist`.
+Inspect it with:
+
+```bash
+sudo plutil -p /Library/LaunchDaemons/com.ollama.headless.plist
+```
+
+The script writes `UserName`, explicit `HOME` and `OLLAMA_MODELS`, and creates or
+repairs log files owned by that account without truncating existing logs. It uses
+checked `launchctl enable`/`bootstrap` commands and waits up to 30 seconds for the
+daemon PID to own the API listener. Startup failures exit nonzero rather than
+printing “Setup Complete”.
 
 | Environment Variable       | Value                        | Effect                                                                                |
 |----------------------------|------------------------------|---------------------------------------------------------------------------------------|
+| `HOME`                    | Selected account home        | Required by Ollama when running under launchd                                           |
+| `OLLAMA_MODELS`           | Existing configured store, or `<account-home>/.ollama/models` | Reuses your existing model store                               |
 | `OLLAMA_HOST`              | `0.0.0.0:11434`              | Binds to all interfaces — accessible from the LAN / over SSH                             |
 | `OLLAMA_FLASH_ATTENTION`   | `1`                          | Enables Flash Attention on Metal, cutting prefill latency 2–3× on long prompts        |
 | `OLLAMA_KV_CACHE_TYPE`     | `q8_0`                       | Quantises the KV cache to 8-bit, saving ~50% context RAM with negligible quality loss |
-| `OLLAMA_KEEP_ALIVE`        | `-1`                         | Keeps the model pinned in memory indefinitely — no reload delay between requests      |
-| `OLLAMA_NUM_PARALLEL`      | `1` (≤64 GB) / `2` (128 GB+) | Concurrent request slots — tuned per RAM tier                                         |
+| `OLLAMA_KEEP_ALIVE`        | `-1`                         | Keeps an idle model resident until eviction/model switching; requests can override keep-alive      |
+| `OLLAMA_NUM_PARALLEL`      | `1` (<128 GB) / `2` (128 GB+) | Concurrent request slots — tuned per RAM tier                                         |
 | `OLLAMA_MAX_LOADED_MODELS` | `1`                          | Prevents multiple models competing for RAM                                            |
 
 Logs are written to:
 - `stdout` → `/var/log/ollama.log`
 - `stderr` → `/var/log/ollama.err`
+
+> `OLLAMA_HOST=0.0.0.0:11434` exposes the API on all network interfaces. Use only
+> on a trusted network, or secure access with firewall rules/an authenticated
+> proxy. For SSH-only access, bind to `127.0.0.1:11434` instead.
 
 ---
 
@@ -286,8 +334,11 @@ sudo launchctl list | grep ollama
 # Follow Ollama logs
 tail -f /var/log/ollama.log
 
-# List loaded models
+# List installed models
 ollama list
+
+# List currently loaded models
+ollama ps
 
 # Check current VRAM limit
 sysctl iogpu.wired_limit_mb
@@ -299,11 +350,33 @@ curl http://localhost:11434/api/tags
 ollama run <model-name>
 
 # Stop / restart the Ollama daemon
-sudo launchctl stop com.ollama.headless
-sudo launchctl start com.ollama.headless
+# Stop (KeepAlive would otherwise relaunch it)
+sudo launchctl bootout system/com.ollama.headless
+# Start
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.ollama.headless.plist
+# Restart a loaded daemon
+sudo launchctl kickstart -k system/com.ollama.headless
 ```
 
 ---
+
+### Troubleshooting Ollama Startup
+
+```bash
+sudo launchctl print system/com.ollama.headless
+sudo lsof -nP -iTCP:11434 -sTCP:LISTEN
+sudo tail -n 40 /var/log/ollama.err
+```
+
+The daemon should show `state = running`, and its PID must match the port listener.
+Saved plist values alone do not prove which server is answering requests.
+
+- `panic: $HOME is not defined`: update the script and run `--ollama-only`.
+- `EX_CONFIG` after changing `UserName`: the repair also fixes root-owned log files.
+- Two models loaded despite the limit: confirm the desktop app or another server
+  is not owning the port. `OLLAMA_NUM_PARALLEL` controls requests per model, not
+  the number of loaded models.
+- Old panic traces remain in logs: logs are preserved; check the latest timestamps.
 
 ### Connecting an Agent or Client
 
@@ -375,3 +448,16 @@ sudo python3 headless-ai-mac.py --restore
 - No system files outside of `/etc/sysctl.conf` and `/Library/LaunchDaemons/` are written
 - `~/.zshrc` is only **appended to** (never overwritten), and only if the entry isn't already present
 - The script is fully **idempotent** — safe to run multiple times
+
+---
+
+## Development / Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m py_compile headless-ai-mac.py
+```
+
+Tests mock privileged commands and use temporary files. They do not modify macOS
+services, system configuration, or your models. Real launchd startup still needs
+verification on the target Mac.
