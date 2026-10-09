@@ -201,10 +201,18 @@ The following background processes are disabled to free RAM and CPU for inferenc
 | `com.apple.spotlight.IndexAgent`                   | Spotlight indexing          |
 | `com.apple.Siri` / `siriknowledged` / `assistantd` | Siri                        |
 | `com.apple.helpd`                                  | Help centre                 |
-| `com.apple.screensharing`                          | Screen sharing              |
 | `com.apple.AirPlayXPCHelper`                       | AirPlay                     |
 | `com.apple.UsageTrackingAgent`                     | Screen Time tracking        |
 | `com.apple.PrivacyAnalyticsUtility`                | Privacy analytics           |
+
+**Screen Sharing is preserved.** Headless setup does not disable remote desktop
+access or automatically enable it. Configure Screen Sharing (or Remote Management)
+and allowed users under **System Settings → General → Sharing**.
+
+Older script versions disabled `com.apple.screensharing`. Updating the script alone
+does not undo that previous setting. Enable the service with
+`sudo launchctl enable system/com.apple.screensharing`, then configure Sharing in
+System Settings. Restore mode retains support for re-enabling the legacy service.
 
 Additionally:
 - **Spotlight indexing** is disabled system-wide (`mdutil -a -i off`)

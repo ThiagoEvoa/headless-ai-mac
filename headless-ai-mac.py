@@ -126,6 +126,7 @@ def print_summary(hw):
 
 # ─── Step 2 – Disable unnecessary services & apps ─────────────────────────────
 
+# Preserve Screen Sharing: remote desktop is a recovery path for headless Macs.
 LAUNCH_AGENTS_TO_DISABLE = [
     "com.apple.photoanalysisd",
     "com.apple.suggestd",
@@ -143,7 +144,6 @@ LAUNCH_AGENTS_TO_DISABLE = [
     "com.apple.assistantd",
     "com.apple.macos.studentd",
     "com.apple.helpd",
-    "com.apple.screensharing",
     "com.apple.AirPlayXPCHelper",
     "com.apple.UsageTrackingAgent",
     "com.apple.PrivacyAnalyticsUtility",
@@ -569,6 +569,7 @@ def print_final_summary(hw, vram_mb):
 
 # ─── Restore mode ─────────────────────────────────────────────────────────────
 
+# Include Screen Sharing to recover installations made with older versions.
 RESTORE_LAUNCH_AGENTS = [
     "com.apple.photoanalysisd",
     "com.apple.suggestd",

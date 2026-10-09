@@ -14,6 +14,19 @@ spec.loader.exec_module(setup)
 ACCOUNT = SimpleNamespace(pw_name='server', pw_uid=501, pw_gid=20, pw_dir='/Users/server')
 
 
+class ScreenSharingTests(unittest.TestCase):
+    def test_setup_preserves_screen_sharing(self):
+        self.assertNotIn('com.apple.screensharing', setup.LAUNCH_AGENTS_TO_DISABLE)
+        with patch.object(setup, 'run', return_value=SimpleNamespace(returncode=0)) as run:
+            setup.disable_unnecessary_services()
+        for call in run.call_args_list:
+            cmd = call.args[0]
+            self.assertFalse('disable' in cmd and any('screensharing' in arg for arg in cmd))
+
+    def test_restore_can_recover_older_installations(self):
+        self.assertIn('com.apple.screensharing', setup.RESTORE_LAUNCH_AGENTS)
+
+
 class OllamaSetupTests(unittest.TestCase):
     def test_sudo_uses_original_account_not_root_home(self):
         with patch.dict(os.environ, {'SUDO_USER': 'server', 'HOME': '/var/root'}, clear=True), \
